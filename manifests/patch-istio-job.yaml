@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: patch-istio-mesh
+  namespace: istio-system
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  template:
+    spec:
+      serviceAccountName: istio-patcher
+      restartPolicy: OnFailure
+      containers:
+      - name: kubectl-patch
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Waiting for istio ConfigMap to exist..."
+          while ! kubectl get configmap istio -n istio-system; do
+            echo "ConfigMap not found, waiting 10 seconds..."
+            sleep 10
+          done
+          
+          echo "Patching Istio ConfigMap with oauth2-proxy configuration..."
+          kubectl patch configmap istio -n istio-system --type='merge' -p='{
+            "data": {
+              "mesh": "accessLogFile: /dev/stdout\ndefaultConfig:\n  discoveryAddress: istiod.istio-system.svc:15012\n  proxyMeta: {}\n  tracing: {}\ndefaultProviders:\n  metrics:\n  - prometheus\nenablePrometheusMerge: true\nrootNamespace: istio-system\ntcpKeepalive:\n  interval: 5s\n  probes: 3\n  time: 10s\ntrustDomain: cluster.local\nextensionProviders:\n- name: oauth2-proxy\n  envoyExtAuthzHttp:\n    service: oauth2-proxy.oauth2-proxy.svc.cluster.local\n    port: 80\n    headersToDownstreamOnDeny:\n    - content-type\n    - set-cookie\n    headersToUpstreamOnAllow:\n    - authorization\n    - path\n    - x-auth-request-email\n    - x-auth-request-groups\n    - x-auth-request-user\n    includeRequestHeadersInCheck:\n    - authorization\n    - cookie\nmeshNetworks: \"networks: {}\""
+            }
+          }'
+          
+          echo "Patch completed successfully!"
+          echo "Verifying the patch..."
+          kubectl get configmap istio -n istio-system -o yaml | grep -A5 "oauth2-proxy" || echo "oauth2-proxy not found in config"
